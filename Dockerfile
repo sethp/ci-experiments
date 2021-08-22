@@ -36,9 +36,9 @@ COPY --from=golangci/golangci-lint:latest-alpine /usr/bin/golangci-lint /usr/bin
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/root/.cache/golangci-lint \
-    golangci-lint run --out-format=github-actions
+    golangci-lint run
 
-# TODO: --out-format=github-actions only some of the time
+# TODO: --out-format=github-actions
 
 FROM base as test
 
