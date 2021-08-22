@@ -1,7 +1,7 @@
 # Notes
 
 - It's a little bit more tortured than writing a makefile / shell script, but not by too much so far
--
+  - Invoking tools "locally" is a lot more tortured though
 
 ## todo
 
@@ -13,4 +13,6 @@
   - depenency change (add / remove / update)
   - CI system-level change (e.g. Dockerfile, docker-bake.hcl)
 - cache-to mode=max ?
--
+- how hard would it be to wrap this up in a github actions frontend that runs the bits concurrently but separates the output?
+  - related: output mode = "stdout/err" (for what? the last container?)
+  - output mode=none, too
