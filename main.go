@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"sync" // unused import
 )
 
 func main() {
