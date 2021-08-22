@@ -7,3 +7,6 @@ import (
 func main() {
 	fmt.Println("hello world")
 }
+
+func unused_function() {
+}
