@@ -8,6 +8,7 @@
 - read: https://github.com/moby/buildkit#exploring-llb
 - registry cache vs gha?
   - is there an "and" in there that's useful?
+- sharing the `mount=type=cache` stuff; that's where a lot of the partial intermediate work is being saved
 - ideas for test cases (we're gonna need a bigger project):
   - source level change (single file vs multi-file?)
   - depenency change (add / remove / update)
@@ -23,4 +24,4 @@
 - debugging a failing target?
   - earthly has a good idea here: https://github.com/earthly/earthly/blob/main/docs/guides/debugging.md
   - related to ^: https://github.com/moby/moby/issues/40887
-- (gha-specific) promote the output
+- (gha-specific) promote the output to the top-level somehow (so we can get e.g. annotations from golangci-lint)
