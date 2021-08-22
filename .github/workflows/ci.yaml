@@ -28,4 +28,4 @@ jobs:
       - name: do it
         run: |
           # TODO: am I doomed to use bake?
-          docker buildx bake ci --progress=plain
+          docker buildx bake ci --progress=plain --set *.cache-from=type=gha --set *.cache-to=type=gha
