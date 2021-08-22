@@ -25,5 +25,7 @@ jobs:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v2
 
-      - name: Run a one-line script
-        run: curl whatismyip.akamai.com
+      - name: do it
+        run: |
+          # TODO: am I doomed to use bake?
+          docker buildx bake ci --progress=plain
