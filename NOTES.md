@@ -25,3 +25,13 @@
   - earthly has a good idea here: https://github.com/earthly/earthly/blob/main/docs/guides/debugging.md
   - related to ^: https://github.com/moby/moby/issues/40887
 - (gha-specific) promote the output to the top-level somehow (so we can get e.g. annotations from golangci-lint)
+
+## security
+
+Caches are trusted implicitly; might might someone slip in an (overt) supply chain attack by:
+
+- Sending a PR that does a --mount=type=cache for the go build cache
+- Writes a "valid" go package that happens to include a backdoor
+- Lets that get compiled into a layer that's exported to the --cache-to?
+
+A possible mitigation would be to consider these things "advisory" and do a full rebuild before shipping artifacts? That's somewhat purpose-defeating, though, in a CD environment.
