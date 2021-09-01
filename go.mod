@@ -4,6 +4,7 @@ go 1.17
 
 require (
 	github.com/docker/buildx v0.6.2
+	github.com/docker/docker v20.10.7+incompatible
 	github.com/moby/buildkit v0.9.0
 	github.com/spf13/pflag v1.0.5
 	github.com/tonistiigi/fsutil v0.0.0-20210609172227-d72af97c0eaf
@@ -18,7 +19,8 @@ require (
 	github.com/containerd/typeurl v1.0.2 // indirect
 	github.com/docker/cli v20.10.7+incompatible // indirect
 	github.com/docker/distribution v2.7.1+incompatible // indirect
-	github.com/docker/docker v20.10.7+incompatible // indirect
+	github.com/docker/go-connections v0.4.0 // indirect
+	github.com/docker/go-units v0.4.0 // indirect
 	github.com/gofrs/flock v0.7.3 // indirect
 	github.com/gogo/googleapis v1.4.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect

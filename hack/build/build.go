@@ -6,11 +6,12 @@ import (
 	"os"
 
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
-	"github.com/moby/buildkit/client/llb/imagemetaresolver"
+	_ "github.com/sethp/ci-experiments/hack/build/connhelper/docker"
 
 	"github.com/docker/buildx/util/progress"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
+	"github.com/moby/buildkit/client/llb/imagemetaresolver"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/session/filesync"
 	"github.com/spf13/pflag"
@@ -28,7 +29,8 @@ import (
 // but also, do I want to make a whole 'nother language? Or use pseudo-data-as-code?
 
 var (
-	mode = pflag.String("progress", "tty", "plain or tty")
+	progressMode = pflag.String("progress", "tty", "plain or tty")
+	connect      = pflag.String("connect", "docker://", "connection to buildkit (docker-container://<container> and docker[+<unix|tcp>]://[docker daemon] supported). Defaults to local docker daemon.")
 )
 
 func main() {
@@ -79,7 +81,7 @@ func main() {
 		},
 	}}))
 
-	c, err := client.New(ctx, "docker-container://buildkitd", client.WithFailFast())
+	c, err := client.New(ctx, *connect, client.WithFailFast())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "client.New() =", err)
 		os.Exit(1)
@@ -87,7 +89,7 @@ func main() {
 
 	// mode := "tty"
 	// mode := "plain"
-	pp := progress.NewPrinter(context.Background(), os.Stdout, *mode)
+	pp := progress.NewPrinter(context.Background(), os.Stdout, *progressMode)
 	pw = pp
 
 	f = func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
