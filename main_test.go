@@ -5,4 +5,6 @@ import (
 )
 
 func Test(_ *testing.T) {
+	// this line automatically changed to wrangle timing
+	var _ = 90
 }
