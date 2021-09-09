@@ -4,14 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
 
 	"github.com/docker/buildx/util/progress"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
-	"github.com/moby/buildkit/client/llb/imagemetaresolver"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/session/filesync"
+	"github.com/opencontainers/go-digest"
 	"github.com/spf13/pflag"
 	fstypes "github.com/tonistiigi/fsutil/types"
 	"golang.org/x/sync/errgroup"
@@ -35,16 +36,7 @@ var (
 	connect      = "docker://"
 	target       = "all"
 
-	// The default image meta resolver is expensive: both in terms of iteration (the anonymous docker hub API
-	// limit is 100 pulls per day).
-	//
-	// TODO: this isn't how it works in docker buildx unless run with --pull
-	//  => [internal] load metadata for gcr.io/distroless/static:nonroot   5.8s
-	//  => [internal] load metadata for docker.io/library/golang:alpine    1.3s
-	// but without --pull
-	//  => [internal] load metadata for docker.io/library/golang:alpine    0.4s
-	//  => [internal] load metadata for gcr.io/distroless/static:nonroot   0.2s
-	imageOpts = []llb.ImageOption{imagemetaresolver.WithDefault}
+	imageOpts = []llb.ImageOption{}
 )
 
 func init() {
@@ -52,27 +44,19 @@ func init() {
 	pflag.StringVar(&connect, "connect", connect, "connection to buildkit (docker-container://<container> and docker[+<unix|tcp>]://[docker daemon] supported). Defaults to local docker daemon.")
 	pflag.StringVar(&target, "target", target, "targets to build (all, lint, test, ...)")
 
-	funczVar("no-resolve", "disable image resolution (to avoid running afoul of dockerhub API limits)", func() error {
-		imageOpts = nil
+	funczVar("pull", "force new pulls on images", func() error {
+		imageOpts = append(imageOpts, llb.ResolveModeForcePull)
 		return nil
 	})
 }
 
-func main() {
-	pflag.Parse()
+var ()
 
-	var (
-		pw progress.Writer
-	)
-
-	resolveStart := time.Now()
-	fmt.Print("Resolving... ") // later we'll print OK
-
-	ctx := context.Background() // TODO: watch for some signals?
-
-	test, err := llb.
-		Image("golang:alpine", imageOpts...).
-		// WithImageConfig([]byte(`{"Env": ["PATH=/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "GOPATH=/go"]}`)).
+func test(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
+	return llb.
+		Image("golang:alpine", append(imageOpts, []llb.ImageOption{
+			metaResolver{c},
+		}...)...).
 		Dir("/go/src/github.com/sethp/ci-experiments").
 		Run(
 			llb.Shlex(`go test ./...`),
@@ -91,19 +75,15 @@ func main() {
 				llb.Scratch(),
 				llb.AsPersistentCacheDir("/go/pkg/mod", llb.CacheMountShared),
 			),
-
-			// This is image meta
-			llb.AddEnv("PATH", "/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
-			llb.AddEnv("GOPATH", "/go"),
 		).
 		Marshal(ctx)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, `test: "llb.State".Marshal() =`, err)
-		os.Exit(1)
-	}
+}
 
-	lint, err := llb.
-		Image("golang:alpine", imageOpts...).
+func lint(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
+	return llb.
+		Image("golang:alpine", append(imageOpts, []llb.ImageOption{
+			metaResolver{c},
+		}...)...).
 		Dir("/go/src/github.com/sethp/ci-experiments").
 		Run(
 			// llb.Shlex(`golangci-lint run`),
@@ -128,19 +108,31 @@ func main() {
 				llb.SourcePath("/usr/bin/golangci-lint"),
 				llb.Readonly,
 			),
-
-			// This is image meta
-			llb.AddEnv("PATH", "/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
-			llb.AddEnv("GOPATH", "/go"),
 		).
 		Marshal(ctx)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, `lint: "llb.State".Marshal() =`, err)
-		os.Exit(1)
-	}
+}
+
+func main() {
+	pflag.Parse()
 
 	var (
-		f        gateway.BuildFunc
+		pw progress.Writer
+	)
+
+	ctx := func() context.Context {
+		ctx, cancel := context.WithCancel(context.Background())
+		ch := make(chan os.Signal, 2)
+		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-ch
+			cancel()
+			<-ch
+			os.Exit(1)
+		}()
+		return ctx
+	}()
+
+	var (
 		solveOpt client.SolveOpt
 	)
 
@@ -156,6 +148,7 @@ func main() {
 	}}))
 
 	c, err := client.New(ctx, connect, client.WithFailFast())
+
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "client.New() =", err)
 		os.Exit(1)
@@ -167,18 +160,6 @@ func main() {
 	}
 	_ = fatal
 
-	// where does this resolve from?
-	// ahh! image meta gets resolved client-side at marshal time
-	// async, err := llb.Scratch().Async(func(c1 context.Context, s llb.State, c2 *llb.Constraints) (llb.State, error) {
-	// 	panic(s)
-	// }).Marshal(ctx)
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	fmt.Printf("OK (%.1fs)\n", time.Since(resolveStart).Seconds())
-
-	// TODO: it doesn't count resolution time, which can be a lot. It'd be cooler if it did.
 	// Uses its own context to try and finish printing errors
 	pp := progress.NewPrinter(context.Background(), os.Stdout, progressMode)
 	defer func() {
@@ -188,7 +169,7 @@ func main() {
 	}()
 	pw = pp
 
-	var def *llb.Definition
+	var fn DefFunc
 	switch target {
 	case "all":
 		// and now for something completely different
@@ -199,7 +180,7 @@ func main() {
 
 		for _, dd := range []struct {
 			name string
-			def  *llb.Definition
+			fn   DefFunc
 		}{{"lint", lint}, {"test", test} /*{"fatal", fatal}*/ /*{"async", async}*/} {
 			pw := progress.WithPrefix(pw, dd.name, true /* this turns the prefix on or off? */)
 			// pw = progress.ResetTime(pw)
@@ -208,16 +189,9 @@ func main() {
 			defer func() {
 				<-progressDone
 			}()
-
-			def := dd.def
+			fn := dd.fn
 			eg.Go(func() error {
-				f = func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
-					return c.Solve(ctx, gateway.SolveRequest{
-						Definition: def.ToPB(),
-					})
-				}
-
-				_, err = c.Build(ctx, solveOpt, "TODO ???", f, statusCh)
+				_, err = c.Build(ctx, solveOpt, "TODO ???", BuildFunc(fn), statusCh)
 				return err
 			})
 		}
@@ -229,17 +203,12 @@ func main() {
 
 		return
 	case "lint":
-		def = lint
+		fn = lint
 	case "test":
-		def = test
+		fn = test
 	default:
-		panic(fmt.Sprintf("unknown target: %q", target))
-	}
-
-	f = func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
-		return c.Solve(ctx, gateway.SolveRequest{
-			Definition: def.ToPB(),
-		})
+		fmt.Fprintf(os.Stderr, "unknown target: %q", target)
+		os.Exit(1)
 	}
 
 	var (
@@ -253,7 +222,7 @@ func main() {
 		<-progressDone
 	}()
 
-	resp, err = c.Build(ctx, solveOpt, "???", f, statusCh)
+	resp, err = c.Build(ctx, solveOpt, "???", BuildFunc(fn), statusCh)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "c.Build(...) =", err)
 		os.Exit(1)
@@ -261,4 +230,34 @@ func main() {
 
 	_ = resp
 	// fmt.Printf("%#v", resp)
+}
+
+type metaResolver struct {
+	llb.ImageMetaResolver
+}
+
+func (m metaResolver) ResolveImageConfig(ctx context.Context, ref string, opt llb.ResolveImageConfigOpt) (digest.Digest, []byte, error) {
+	return m.ImageMetaResolver.ResolveImageConfig(ctx, ref, llb.ResolveImageConfigOpt{
+		Platform:    opt.Platform,
+		ResolveMode: opt.ResolveMode,
+		LogName:     fmt.Sprintf("[def] load metadata for %s", ref),
+	})
+}
+
+func (m metaResolver) SetImageOption(ii *llb.ImageInfo) {
+	llb.WithMetaResolver(m).SetImageOption(ii)
+}
+
+type DefFunc func(context.Context, gateway.Client) (*llb.Definition, error)
+
+func BuildFunc(fn DefFunc) gateway.BuildFunc {
+	return func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
+		def, err := fn(ctx, c)
+		if err != nil {
+			return nil, err
+		}
+		return c.Solve(ctx, gateway.SolveRequest{
+			Definition: def.ToPB(),
+		})
+	}
 }
