@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/docker/buildx/util/progress"
 	"github.com/moby/buildkit/client"
@@ -19,6 +19,7 @@ import (
 
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
 	_ "github.com/sethp/ci-experiments/hack/build/connhelper/docker"
+	"github.com/sethp/ci-experiments/hack/build/extcontext"
 )
 
 // go run ./hack/build should:
@@ -50,7 +51,9 @@ func init() {
 	})
 }
 
-var ()
+var (
+	_, _ = fatal, slow
+)
 
 func test(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
 	return llb.
@@ -112,124 +115,128 @@ func lint(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
 		Marshal(ctx)
 }
 
+func fatal(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
+	return llb.Scratch().Run(llb.Args([]string{"always fails"})).Marshal(ctx)
+}
+
+func slow(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
+	return llb.Image("busybox").Run(llb.Args([]string{"sleep", "5"})).Marshal(ctx)
+}
+
 func main() {
 	pflag.Parse()
 
-	var (
-		pw progress.Writer
-	)
+	os.Exit(func() (exitcode int) {
+		var (
+			pw progress.Writer
+		)
 
-	ctx := func() context.Context {
-		ctx, cancel := context.WithCancel(context.Background())
-		ch := make(chan os.Signal, 2)
-		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-		go func() {
-			<-ch
-			cancel()
-			<-ch
-			os.Exit(1)
-		}()
-		return ctx
-	}()
+		ctx, cancel := extcontext.WithSignals(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
 
-	var (
-		solveOpt client.SolveOpt
-	)
+		var (
+			solveOpt client.SolveOpt
+		)
 
-	// TODO: shared session?
-	solveOpt.Session = append(solveOpt.Session, filesync.NewFSSyncProvider([]filesync.SyncedDir{{
-		Name: ".",
-		Dir:  ".",
-		Map: func(_ string, st *fstypes.Stat) bool {
-			st.Uid = 0
-			st.Gid = 0
-			return true
-		},
-	}}))
+		// TODO: shared session?
+		solveOpt.Session = append(solveOpt.Session, filesync.NewFSSyncProvider([]filesync.SyncedDir{{
+			Name: ".",
+			Dir:  ".",
+			Map: func(_ string, st *fstypes.Stat) bool {
+				st.Uid = 0
+				st.Gid = 0
+				return true
+			},
+		}}))
 
-	c, err := client.New(ctx, connect, client.WithFailFast())
+		c, err := client.New(ctx, connect, client.WithFailFast())
 
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "client.New() =", err)
-		os.Exit(1)
-	}
-
-	fatal, err := llb.Scratch().Run(llb.Shlex("false")).Marshal(ctx)
-	if err != nil {
-		panic(err)
-	}
-	_ = fatal
-
-	// Uses its own context to try and finish printing errors
-	pp := progress.NewPrinter(context.Background(), os.Stdout, progressMode)
-	defer func() {
-		if err := pp.Wait(); err != nil {
-			fmt.Fprintln(os.Stderr, "progress.Wait() =", err)
-		}
-	}()
-	pw = pp
-
-	var fn DefFunc
-	switch target {
-	case "all":
-		// and now for something completely different
-
-		// ignoring this returned context is what lets us run to the end even when one target fails
-		// eg, _ := errgroup.WithContext(ctx)
-		eg := errgroup.Group{}
-
-		for _, dd := range []struct {
-			name string
-			fn   DefFunc
-		}{{"lint", lint}, {"test", test} /*{"fatal", fatal}*/ /*{"async", async}*/} {
-			pw := progress.WithPrefix(pw, dd.name, true /* this turns the prefix on or off? */)
-			// pw = progress.ResetTime(pw)
-
-			statusCh, progressDone := progress.NewChannel(pw)
-			defer func() {
-				<-progressDone
-			}()
-			fn := dd.fn
-			eg.Go(func() error {
-				_, err = c.Build(ctx, solveOpt, "TODO ???", BuildFunc(fn), statusCh)
-				return err
-			})
-		}
-
-		err := eg.Wait()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "eg.Wait() =", err)
+			fmt.Fprintln(os.Stderr, "client.New() =", err)
+			return 1
 		}
+
+		// Uses its own context to try and finish printing errors
+		progressCtx, progressCancel := extcontext.WithGracePeriod(ctx, 500*time.Millisecond)
+		defer progressCancel()
+		pp := progress.NewPrinter(progressCtx, os.Stdout, progressMode)
+		defer func() {
+			if err := pp.Wait(); err != nil {
+				fmt.Fprintln(os.Stderr, "progress.Wait() =", err)
+				exitcode = 1
+			}
+		}()
+		pw = pp
+
+		var fn DefFunc
+		switch target {
+		case "all":
+			// and now for something completely different
+
+			// ignoring this returned context is what lets us run to the end even when one target fails
+			// eg, _ := errgroup.WithContext(ctx)
+			eg := errgroup.Group{}
+
+			for _, dd := range []struct {
+				name string
+				fn   DefFunc
+			}{{"lint", lint}, {"test", test}, {"fatal", fatal} /*{"async", async}*/} {
+				pw := progress.WithPrefix(pw, dd.name, true /* this turns the prefix on or off? */)
+				// pw = progress.ResetTime(pw)
+
+				statusCh, progressDone := progress.NewChannel(pw)
+				defer func() {
+					<-progressDone
+				}()
+				fn := dd.fn
+				eg.Go(func() error {
+					_, err = c.Build(ctx, solveOpt, "TODO ???", BuildFunc(fn), statusCh)
+					return err
+				})
+			}
+
+			err := eg.Wait()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "eg.Wait() =", err)
+				return 1
+			}
+
+			return
+		case "lint":
+			fn = lint
+		case "test":
+			fn = test
+		case "fatal":
+			fn = fatal
+		case "slow":
+			fn = slow
+		default:
+			fmt.Fprintf(os.Stderr, "unknown target: %q", target)
+		}
+
+		var (
+			statusCh     chan *client.SolveStatus
+			progressDone chan struct{}
+			resp         *client.SolveResponse
+		)
+		pw = progress.ResetTime(pw)
+		statusCh, progressDone = progress.NewChannel(pw)
+		defer func() {
+			<-progressDone
+		}()
+
+		resp, err = c.Build(ctx, solveOpt, "???", BuildFunc(fn), statusCh)
+		if err != nil {
+			<-progressDone
+			fmt.Fprintln(os.Stderr, "c.Build(...) =", err)
+			return 1
+		}
+
+		_ = resp
+		// fmt.Printf("%#v", resp)
 
 		return
-	case "lint":
-		fn = lint
-	case "test":
-		fn = test
-	default:
-		fmt.Fprintf(os.Stderr, "unknown target: %q", target)
-		os.Exit(1)
-	}
-
-	var (
-		statusCh     chan *client.SolveStatus
-		progressDone chan struct{}
-		resp         *client.SolveResponse
-	)
-	pw = progress.ResetTime(pw)
-	statusCh, progressDone = progress.NewChannel(pw)
-	defer func() {
-		<-progressDone
-	}()
-
-	resp, err = c.Build(ctx, solveOpt, "???", BuildFunc(fn), statusCh)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "c.Build(...) =", err)
-		os.Exit(1)
-	}
-
-	_ = resp
-	// fmt.Printf("%#v", resp)
+	}())
 }
 
 type metaResolver struct {
