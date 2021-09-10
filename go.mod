@@ -39,6 +39,7 @@ require (
 	github.com/sirupsen/logrus v1.8.1 // indirect
 	github.com/tonistiigi/units v0.0.0-20180711220420-6950e57a87ea // indirect
 	github.com/tonistiigi/vt100 v0.0.0-20210615222946-8066bb97264f // indirect
+	github.com/yargevad/filepathx v1.0.0 // indirect
 	go.opentelemetry.io/contrib v0.21.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.21.0 // indirect
 	go.opentelemetry.io/otel v1.0.0-RC1 // indirect

@@ -15,6 +15,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	"github.com/spf13/pflag"
 	fstypes "github.com/tonistiigi/fsutil/types"
+	"github.com/yargevad/filepathx"
 	"golang.org/x/sync/errgroup"
 
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
@@ -64,7 +65,7 @@ func test(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
 		Run(
 			llb.Shlex(`go test ./...`),
 			llb.AddMount("/go/src/github.com/sethp/ci-experiments",
-				llb.Local(".", llb.IncludePatterns([]string{"**/*.go", "go.mod", "go.sum" /* TODO: testdata? others? */})),
+				llb.Local(".", llb.IncludePatterns(append(mustGlob("./**/*.go"), []string{"go.mod", "go.sum" /* TODO: testdata? others? */}...))),
 				llb.Readonly,
 			),
 			llb.AddEnv("CGO_ENABLED", "0"),
@@ -89,10 +90,9 @@ func lint(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
 		}...)...).
 		Dir("/go/src/github.com/sethp/ci-experiments").
 		Run(
-			// llb.Shlex(`golangci-lint run`),
 			llb.Args([]string{"golangci-lint", "run"}),
 			llb.AddMount("/go/src/github.com/sethp/ci-experiments",
-				llb.Local(".", llb.IncludePatterns([]string{"**/*.go", "go.mod", "go.sum"})),
+				llb.Local(".", llb.IncludePatterns(append(mustGlob("./**/*.go"), []string{"go.mod", "go.sum", ".golangci.yaml", ".golangci.yml", ".golangci.toml", ".golangci.json"}...))),
 				llb.Readonly,
 			),
 			llb.AddEnv("CGO_ENABLED", "0"),
@@ -267,4 +267,12 @@ func BuildFunc(fn DefFunc) gateway.BuildFunc {
 			Definition: def.ToPB(),
 		})
 	}
+}
+
+func mustGlob(pattern string) []string {
+	paths, err := filepathx.Glob(pattern)
+	if err != nil {
+		panic(err)
+	}
+	return paths
 }
