@@ -107,6 +107,8 @@ func Shlex(str string) llb.RunOption {
 func Cmd(name string, arg ...string) llb.RunOption {
 	args := []string{name}
 	args = append(args, arg...)
+	// TODO: this only makes sense when running a single target
+	args = append(args, pflag.Args()...)
 
 	return llb.Args(args)
 }
