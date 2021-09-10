@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/docker/buildx/util/progress"
+	"github.com/google/shlex"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
@@ -63,22 +64,12 @@ func test(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
 		}...)...).
 		Dir("/go/src/github.com/sethp/ci-experiments").
 		Run(
-			llb.Shlex(`go test ./...`),
+			Shlex(`go test ./...`),
 			llb.AddMount("/go/src/github.com/sethp/ci-experiments",
 				llb.Local(".", llb.IncludePatterns(append(mustGlob("./**/*.go"), []string{"go.mod", "go.sum" /* TODO: testdata? others? */}...))),
 				llb.Readonly,
 			),
-			llb.AddEnv("CGO_ENABLED", "0"),
-			llb.AddEnv("GOOS", "linux"),
-			llb.AddEnv("GOARCH", "amd64"),
-			llb.AddMount("/root/.cache/go-build",
-				llb.Scratch(),
-				llb.AsPersistentCacheDir("/root/.cache/go-build", llb.CacheMountShared),
-			),
-			llb.AddMount("/go/pkg/mod",
-				llb.Scratch(),
-				llb.AsPersistentCacheDir("/go/pkg/mod", llb.CacheMountShared),
-			),
+			GoOpts,
 		).
 		Marshal(ctx)
 }
@@ -90,29 +81,79 @@ func lint(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
 		}...)...).
 		Dir("/go/src/github.com/sethp/ci-experiments").
 		Run(
-			llb.Args([]string{"golangci-lint", "run"}),
+			Cmd("golangci-lint", "run"),
 			llb.AddMount("/go/src/github.com/sethp/ci-experiments",
 				llb.Local(".", llb.IncludePatterns(append(mustGlob("./**/*.go"), []string{"go.mod", "go.sum", ".golangci.yaml", ".golangci.yml", ".golangci.toml", ".golangci.json"}...))),
 				llb.Readonly,
 			),
-			llb.AddEnv("CGO_ENABLED", "0"),
-			llb.AddEnv("GOOS", "linux"),
-			llb.AddEnv("GOARCH", "amd64"),
-			llb.AddMount("/root/.cache/go-build",
-				llb.Scratch(),
-				llb.AsPersistentCacheDir("/root/.cache/go-build", llb.CacheMountShared),
-			),
-			llb.AddMount("/go/pkg/mod",
-				llb.Scratch(),
-				llb.AsPersistentCacheDir("/go/pkg/mod", llb.CacheMountShared),
-			),
-			llb.AddMount("/usr/bin/golangci-lint",
+			GoOpts,
+			SharedCaches("/root/.cache/golangci-lint"),
+			WithTool("/usr/bin/golangci-lint",
 				llb.Image("golangci/golangci-lint:latest-alpine", imageOpts...),
-				llb.SourcePath("/usr/bin/golangci-lint"),
-				llb.Readonly,
 			),
 		).
 		Marshal(ctx)
+}
+
+func Shlex(str string) llb.RunOption {
+	arg, err := shlex.Split(str)
+	if err != nil {
+		// This is a little unfortunate
+		panic(err)
+	}
+	return Cmd(arg[0], arg[1:]...)
+}
+
+func Cmd(name string, arg ...string) llb.RunOption {
+	args := []string{name}
+	args = append(args, arg...)
+
+	return llb.Args(args)
+}
+
+func WithTool(path string, state llb.State, extraOpts ...llb.MountOption) llb.RunOption {
+	opts := []llb.MountOption{
+		llb.SourcePath(path),
+		llb.Readonly,
+	}
+	opts = append(opts, extraOpts...)
+	return llb.AddMount(path, state, opts...)
+}
+
+type RunOptions []llb.RunOption
+
+func (rr RunOptions) SetRunOption(ei *llb.ExecInfo) {
+	for _, r := range rr {
+		r.SetRunOption(ei)
+	}
+}
+
+var (
+	GoOpts = RunOptions{
+		GoEnv,
+		GoCaches,
+	}
+	GoEnv = RunOptions{
+		llb.AddEnv("CGO_ENABLED", "0"),
+		llb.AddEnv("GOOS", "linux"),
+		llb.AddEnv("GOARCH", "amd64"),
+	}
+	GoCaches = SharedCaches(
+		"/root/.cache/go-build",
+		"/go/pkg/mod",
+	)
+)
+
+func SharedCaches(dest ...string) RunOptions {
+	var rr RunOptions
+	for _, d := range dest {
+		rr = append(rr,
+			llb.AddMount(d,
+				llb.Scratch(),
+				llb.AsPersistentCacheDir(d, llb.CacheMountShared)),
+		)
+	}
+	return rr
 }
 
 func fatal(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
