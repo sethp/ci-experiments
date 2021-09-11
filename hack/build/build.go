@@ -95,6 +95,22 @@ func lint(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
 		Marshal(ctx)
 }
 
+func tidy(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
+	return llb.
+		Image("golang:alpine", append(imageOpts, []llb.ImageOption{
+			metaResolver{c},
+		}...)...).
+		Dir("/go/src/github.com/sethp/ci-experiments").
+		Run(
+			Cmd("./hack/check-go-mod.sh"),
+			llb.AddMount("/go/src/github.com/sethp/ci-experiments",
+				llb.Local(".", llb.IncludePatterns(append(mustGlob("./**/*.go"), []string{"go.mod", "go.sum", "hack/check-go-mod.sh"}...))),
+			),
+			GoOpts,
+		).
+		Marshal(ctx)
+}
+
 func Shlex(str string) llb.RunOption {
 	arg, err := shlex.Split(str)
 	if err != nil {
@@ -223,7 +239,12 @@ func main() {
 			for _, dd := range []struct {
 				name string
 				fn   DefFunc
-			}{{"lint", lint}, {"test", test}, {"fatal", fatal} /*{"async", async}*/} {
+			}{
+				{"lint", lint},
+				{"test", test},
+				{"tidy", tidy},
+				// {"fatal", fatal},
+			} {
 				pw := progress.WithPrefix(pw, dd.name, true /* this turns the prefix on or off? */)
 				// pw = progress.ResetTime(pw)
 
@@ -247,6 +268,8 @@ func main() {
 			return
 		case "lint":
 			fn = lint
+		case "tidy":
+			fn = tidy
 		case "test":
 			fn = test
 		case "fatal":
@@ -254,7 +277,8 @@ func main() {
 		case "slow":
 			fn = slow
 		default:
-			fmt.Fprintf(os.Stderr, "unknown target: %q", target)
+			fmt.Fprintf(os.Stderr, "unknown target: %q\n", target)
+			return 1
 		}
 
 		var (

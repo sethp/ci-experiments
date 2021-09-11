@@ -21,6 +21,7 @@
   - earthly has a good idea here: https://github.com/earthly/earthly/blob/main/docs/guides/debugging.md
   - related to ^: https://github.com/moby/moby/issues/40887
 - (gha-specific) promote the output to the top-level somehow (so we can get e.g. annotations from golangci-lint)
+- (gha-specific) take a "ci mode = gha" parameter when checking go.mod/go.sum and leave suggestion comments instead?
 
 ## security
 
