@@ -111,6 +111,25 @@ func tidy(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
 		Marshal(ctx)
 }
 
+func shellcheck(ctx context.Context, c gateway.Client) (*llb.Definition, error) {
+	scripts := mustGlob("./**/*.sh")
+	return llb.
+		Image("alpine", append(imageOpts, []llb.ImageOption{
+			metaResolver{c},
+		}...)...).
+		Dir("/go/src/github.com/sethp/ci-experiments").
+		Run(
+			Cmd("shellcheck", scripts...),
+			llb.AddMount("/go/src/github.com/sethp/ci-experiments",
+				llb.Local(".", llb.IncludePatterns(scripts)),
+			),
+			WithTool("/bin/shellcheck",
+				llb.Image("koalaman/shellcheck:latest"),
+			),
+		).
+		Marshal(ctx)
+}
+
 func Shlex(str string) llb.RunOption {
 	arg, err := shlex.Split(str)
 	if err != nil {
@@ -241,8 +260,10 @@ func main() {
 				fn   DefFunc
 			}{
 				{"lint", lint},
+				{"shellcheck", shellcheck},
 				{"test", test},
 				{"tidy", tidy},
+
 				// {"fatal", fatal},
 			} {
 				pw := progress.WithPrefix(pw, dd.name, true /* this turns the prefix on or off? */)
@@ -268,6 +289,8 @@ func main() {
 			return
 		case "lint":
 			fn = lint
+		case "shellcheck":
+			fn = shellcheck
 		case "tidy":
 			fn = tidy
 		case "test":
