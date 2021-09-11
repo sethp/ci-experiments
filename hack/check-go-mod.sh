@@ -2,21 +2,23 @@
 
 STATUS=0
 
-cp go.mod go.mod.orig
-cp go.sum go.sum.orig
+tmp=$(mktemp -d)
+
+trap 'rm -rf -- "$tmp"' INT TERM HUP EXIT
+
+cp go.mod go.sum "$tmp/"
 
 go mod tidy
 
-mv go.mod go.mod.tidy
-mv go.sum go.sum.tidy
-
-mv go.mod.orig go.mod
-mv go.sum.orig go.sum
-
 for file in go.mod go.sum ; do
-    if ! diff -u $file $file.tidy ; then
-        STATUS=1
-    fi
+    cp "$file" "$tmp/$file.tidy"
+    (
+        cd "$tmp"
+        if ! diff -u $file $file.tidy ; then
+            STATUS=1
+        fi
+    )
+    cp "$tmp/$file" "$file"
 done
 
 exit "$STATUS"
